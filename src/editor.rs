@@ -60,14 +60,18 @@ impl Editor {
     pub fn default() -> Self {
         let args: Vec<String> = env::args().collect();
         let mut initial_status = String::from("HELP: Ctrl-S = save | Ctrl-Q = quit");
-        let document = if args.len() > 1 {
-            let file_name = &args[1];
+
+        let document = if let Some(file_name) = args.get(1) {
             let doc = Document::open(file_name);
             if let Ok(doc) = doc {
                 doc
             } else {
+                initial_status = format!("ERR: Could not open file: {}", file_name);
                 Document::default()
-            };
+            }
+        } else {
+            Document::default()
+        };
 
         Self {
             should_quit: false,
