@@ -28,7 +28,6 @@ impl Row {
         let start = cmp::min(start, end);
         let mut result = String::new();
         let mut current_highlighting = &highlighting::Type::None;
-
         #[allow(clippy::integer_arithmetic)]
         for (index, grapheme) in self.string[..]
             .graphemes(true)
@@ -47,7 +46,6 @@ impl Row {
                         format!("{}", termion::color::Fg(highlighting_type.to_color()));
                     result.push_str(&start_highlight[..]);
                 }
-
                 if c == '\t' {
                     result.push_str(" ");
                 } else {
@@ -74,10 +72,8 @@ impl Row {
             self.len += 1;
             return;
         }
-
         let mut result: String = String::new();
         let mut length = 0;
-
         for (index, grapheme) in self.string[..].graphemes(true).enumerate() {
             length += 1;
             if index == at {
@@ -86,7 +82,6 @@ impl Row {
             }
             result.push_str(grapheme);
         }
-
         self.len = length;
         self.string = result;
     }
@@ -95,7 +90,6 @@ impl Row {
         if at >= self.len() {
             return;
         }
-
         let mut result: String = String::new();
         let mut length = 0;
         for (index, grapheme) in self.string[..].graphemes(true).enumerate() {
@@ -104,7 +98,6 @@ impl Row {
                 result.push_str(grapheme);
             }
         }
-
         self.len = length;
         self.string = result;
     }
@@ -131,7 +124,6 @@ impl Row {
 
         self.string = row;
         self.len = length;
-
         Self {
             string: splitted_row,
             len: splitted_length,
@@ -191,7 +183,7 @@ impl Row {
                 if let Some(next_index) = search_match.checked_add(word[..].graphemes(true).count())
                 {
                     #[allow(clippy::indexing_slicing)]
-                    for i in search_match..next_index {
+                    for i in index.saturating_add(search_match)..next_index {
                         self.highlighting[i] = highlighting::Type::Match;
                     }
                     index = next_index;
@@ -202,10 +194,92 @@ impl Row {
         }
     }
 
+    fn highlight_str(
+        &mut self,
+        index: &mut usize,
+        substring: &str,
+        chars: &[char],
+        hl_type: highlighting::Type,
+    ) -> bool {
+        if substring.is_empty() {
+            return false;
+        }
+        for (substring_index, c) in substring.chars().enumerate() {
+            if let Some(next_char) = chars.get(index.saturating_add(substring_index)) {
+                if *next_char != c {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        for _ in 0..substring.len() {
+            self.highlighting.push(hl_type);
+            *index += 1;
+        }
+        true
+    }
+    fn highlight_keywords(
+        &mut self,
+        index: &mut usize,
+        chars: &[char],
+        keywords: &[String],
+        hl_type: highlighting::Type,
+    ) -> bool {
+        if *index > 0 {
+            #[allow(clippy::indexing_slicing, clippy::integer_arithmetic)]
+            let prev_char = chars[*index - 1];
+            if !is_separator(prev_char) {
+                return false;
+            }
+        }
+        for word in keywords {
+            if *index < chars.len().saturating_sub(word.len()) {
+                #[allow(clippy::indexing_slicing, clippy::integer_arithmetic)]
+                let next_char = chars[*index + word.len()];
+                if !is_separator(next_char) {
+                    continue;
+                }
+            }
+
+            if self.highlight_str(index, &word, chars, hl_type) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn highlight_primary_keywords(
+        &mut self,
+        index: &mut usize,
+        opts: &HighlightingOptions,
+        chars: &[char],
+    ) -> bool {
+        self.highlight_keywords(
+            index,
+            chars,
+            opts.primary_keywords(),
+            highlighting::Type::PrimaryKeywords,
+        )
+    }
+    fn highlight_secondary_keywords(
+        &mut self,
+        index: &mut usize,
+        opts: &HighlightingOptions,
+        chars: &[char],
+    ) -> bool {
+        self.highlight_keywords(
+            index,
+            chars,
+            opts.secondary_keywords(),
+            highlighting::Type::SecondaryKeywords,
+        )
+    }
+
     fn highlight_char(
         &mut self,
         index: &mut usize,
-        opts: HighlightingOptions,
+        opts: &HighlightingOptions,
         c: char,
         chars: &[char],
     ) -> bool {
@@ -233,7 +307,7 @@ impl Row {
     fn highlight_comment(
         &mut self,
         index: &mut usize,
-        opts: HighlightingOptions,
+        opts: &HighlightingOptions,
         c: char,
         chars: &[char],
     ) -> bool {
@@ -254,7 +328,7 @@ impl Row {
     fn highlight_string(
         &mut self,
         index: &mut usize,
-        opts: HighlightingOptions,
+        opts: &HighlightingOptions,
         c: char,
         chars: &[char],
     ) -> bool {
@@ -280,7 +354,7 @@ impl Row {
     fn highlight_number(
         &mut self,
         index: &mut usize,
-        opts: HighlightingOptions,
+        opts: &HighlightingOptions,
         c: char,
         chars: &[char],
     ) -> bool {
@@ -288,7 +362,7 @@ impl Row {
             if *index > 0 {
                 #[allow(clippy::indexing_slicing, clippy::integer_arithmetic)]
                 let prev_char = chars[*index - 1];
-                if !prev_char.is_ascii_punctuation() && !prev_char.is_ascii_whitespace() {
+                if !is_separator(prev_char) {
                     return false;
                 }
             }
@@ -303,19 +377,20 @@ impl Row {
                     break;
                 }
             }
-
             return true;
         }
         false
     }
 
-    pub fn highlight(&mut self, opts: HighlightingOptions, word: Option<&str>) {
+    pub fn highlight(&mut self, opts: &HighlightingOptions, word: Option<&str>) {
         self.highlighting = Vec::new();
         let chars: Vec<char> = self.string.chars().collect();
         let mut index = 0;
         while let Some(c) = chars.get(index) {
             if self.highlight_char(&mut index, opts, *c, &chars)
                 || self.highlight_comment(&mut index, opts, *c, &chars)
+                || self.highlight_primary_keywords(&mut index, &opts, &chars)
+                || self.highlight_secondary_keywords(&mut index, &opts, &chars)
                 || self.highlight_string(&mut index, opts, *c, &chars)
                 || self.highlight_number(&mut index, opts, *c, &chars)
             {
@@ -326,4 +401,8 @@ impl Row {
         }
         self.highlight_match(word);
     }
+}
+
+fn is_separator(c: char) -> bool {
+    c.is_ascii_punctuation() || c.is_ascii_whitespace()
 }
