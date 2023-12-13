@@ -2,7 +2,6 @@ use crate::FileType;
 use crate::Position;
 use crate::Row;
 use crate::SearchDirection;
-use std::default;
 use std::fs;
 use std::io::{Error, Write};
 
@@ -19,13 +18,9 @@ impl Document {
         let contents = fs::read_to_string(filename)?;
         let file_type = FileType::from(filename);
         let mut rows = Vec::new();
-
         for value in contents.lines() {
-            let mut row = Row::from(value);
-            row.highlight(&file_type.highlighting_options(), None);
-            rows.push(row);
+            rows.push(Row::from(value));
         }
-
         Ok(Self {
             rows,
             file_name: Some(filename.to_string()),
@@ -50,21 +45,17 @@ impl Document {
         self.rows.len()
     }
 
-    pub fn insert_newline(&mut self, at: &Position) {
+    fn insert_newline(&mut self, at: &Position) {
         if at.y > self.rows.len() {
             return;
         }
-
         if at.y == self.rows.len() {
             self.rows.push(Row::default());
             return;
         }
-
         #[allow(clippy::indexing_slicing)]
         let current_row = &mut self.rows[at.y];
-        let mut new_row = current_row.split(at.x);
-        current_row.highlight(&self.file_type.highlighting_options(), None);            
-        new_row.highlight(&self.file_type.highlighting_options(), None);
+        let new_row = current_row.split(at.x);
         #[allow(clippy::integer_arithmetic)]
         self.rows.insert(at.y + 1, new_row);
     }
@@ -74,45 +65,43 @@ impl Document {
             return;
         }
         self.dirty = true;
-
         if c == '\n' {
             self.insert_newline(at);
-            return;
-        }
-
-        if at.y == self.rows.len() {
+        } else if at.y == self.rows.len() {
             let mut row = Row::default();
             row.insert(0, c);
-            row.highlight(&self.file_type.highlighting_options(), None);
             self.rows.push(row);
         } else {
             #[allow(clippy::indexing_slicing)]
             let row = &mut self.rows[at.y];
             row.insert(at.x, c);
-            row.highlight(&self.file_type.highlighting_options(), None);
+        }
+        self.unhighlight_rows(at.y);
+    }
+
+    fn unhighlight_rows(&mut self, start: usize) {
+        let start = start.saturating_sub(1);
+        for row in self.rows.iter_mut().skip(start) {
+            row.is_highlighted = false;
         }
     }
 
     #[allow(clippy::integer_arithmetic, clippy::indexing_slicing)]
     pub fn delete(&mut self, at: &Position) {
         let len = self.rows.len();
-        // if cursor position is over docuemnt size
         if at.y >= len {
             return;
         }
         self.dirty = true;
-
-        // if cursor position is at the end of the line and not the docmennt's last line
         if at.x == self.rows[at.y].len() && at.y + 1 < len {
             let next_row = self.rows.remove(at.y + 1);
             let row = &mut self.rows[at.y];
             row.append(&next_row);
-            row.highlight(&self.file_type.highlighting_options(), None);
         } else {
             let row = &mut self.rows[at.y];
             row.delete(at.x);
-            row.highlight(&self.file_type.highlighting_options(), None);
         }
+        self.unhighlight_rows(at.y);
     }
 
     pub fn save(&mut self) -> Result<(), Error> {
@@ -122,9 +111,7 @@ impl Document {
             for row in &mut self.rows {
                 file.write_all(row.as_bytes())?;
                 file.write_all(b"\n")?;
-                row.highlight(&self.file_type.highlighting_options(), None);
             }
-            self.file_type = FileType::from(file_name);
             self.dirty = false;
         }
         Ok(())
@@ -171,9 +158,25 @@ impl Document {
         None
     }
 
-    pub fn highlight(&mut self, word: Option<&str>) {
-        for row in &mut self.rows {
-            row.highlight(&self.file_type.highlighting_options(), word);
+    pub fn highlight(&mut self, word: &Option<String>, until: Option<usize>) {
+        let mut start_with_comment = false;
+        let until = if let Some(until) = until {
+            if until.saturating_add(1) < self.rows.len() {
+                until.saturating_add(1)
+            } else {
+                self.rows.len()
+            }
+        } else {
+            self.rows.len()
+        };
+
+        #[allow(clippy::indexing_slicing)]
+        for row in &mut self.rows[..until] {
+            start_with_comment = row.highlight(
+                &self.file_type.highlighting_options(),
+                word,
+                start_with_comment,
+            );
         }
     }
 }
