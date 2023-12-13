@@ -275,6 +275,18 @@ impl Row {
                 }            
             }
 
+            if opts.comments() && !in_string && *c == '/' {
+                if let Some(next_char) = chars.get(index.saturating_add(1)) {
+                    if *next_char == '/' {
+                        for _ in index..self.len() {
+                            highlighting.push(highlighting::Type::Comment);
+                            index += 1;
+                        }
+                        break;
+                    }
+                };
+            }
+
             if opts.numbers() {
                 if (c.is_ascii_digit()
                     && (prev_is_separator || *previous_highlight == highlighting::Type::Number))            
